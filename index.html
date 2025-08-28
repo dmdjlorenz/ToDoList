@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TO DO LIST</title>
-    <link rel="manifest" href="manifest.json">
+    <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#ffffff">
+    <link rel="icon" href="/icone.png" type="image/png">
+    <link rel="apple-touch-icon" href="/icone.png">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -690,7 +692,7 @@
 
             // Register service worker
             if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register('sw.js')
+                navigator.serviceWorker.register('/sw.js', { scope: '/' })
                     .then(reg => console.log('Service Worker registered', reg))
                     .catch(err => console.error('Service Worker registration failed', err));
             }
@@ -699,5 +701,4 @@
         });
     </script>
 </body>
-
 </html>
