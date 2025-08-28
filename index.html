@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TO DO LIST</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#ffffff">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 90%;
+            max-width: 800px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        .sort-btn {
+            display: block;
+            margin: 10px auto;
+            padding: 10px 20px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .sort-btn:hover {
+            background-color: #1976D2;
+        }
+
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #ddd;
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f0f0f0;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        .record-container {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .record-label {
+            display: block;
+            margin-bottom: 10px;
+            font-size: 16px;
+            color: #333;
+        }
+
+        .record-btn {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 60px;
+            height: 60px;
+            background-color: #2196F3;
+            border-radius: 50%;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            margin: 0 auto;
+        }
+
+        .record-btn.recording {
+            background-color: #f44336;
+        }
+
+        .record-btn::before {
+            content: "🎤";
+            color: black;
+        }
+
+        .notification {
+            display: none;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #ff69b4;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+            z-index: 2;
+        }
+
+        .notification button {
+            margin-left: 10px;
+            background-color: #000000;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        @media (max-width: 600px) {
+            th, td {
+                padding: 8px;
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TO DO LIST</h1>
+        <button id="sort-btn" class="sort-btn">Changer en Date/Tâche</button>
+        <div class="table-container">
+            <table id="tasks-table">
+                <thead>
+                    <tr>
+                        <th>Enrg</th>
+                        <th>Tâche</th>
+                        <th>Date</th>
+                        <th>PJ</th>
+                        <th>Supp</th>
+                    </tr>
+                </thead>
+                <tbody id="tasks-body"></tbody>
+            </table>
+        </div>
+        <div class="record-container">
+            <span id="record-label" class="record-label">Clique pour enregistrer</span>
+            <button id="record-btn" class="record-btn"></button>
+        </div>
+    </div>
+
+    <audio id="audio-player" controls style="display: none;"></audio>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const tasksBody = document.getElementById('tasks-body');
+        const recordBtn = document.getElementById('record-btn');
+        const recordLabel = document.getElementById('record-label');
+        const audioPlayer = document.getElementById('audio-player');
+        const sortBtn = document.getElementById('sort-btn');
+
+        let tasks = JSON.parse(localStorage.getItem('tasks')) || [];
+        let mediaRecorder, recognition;
+        let audioChunks = [];
+        let transcript = '';
+        let isSortedByDate = false;
+
+        // Vérification compatibilité reconnaissance vocale
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'fr-FR';
+            recognition.interimResults = true;
+            recognition.continuous = true;
+
+            recognition.onresult = (event) => {
+                transcript = Array.from(event.results)
+                    .map(result => result[0].transcript)
+                    .join(' ');
+            };
+
+            recognition.onerror = (event) => {
+                console.error('Erreur reconnaissance vocale:', event.error);
+            };
+
+            recognition.onend = () => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+            };
+        } else {
+            alert('La reconnaissance vocale n’est pas supportée sur ce navigateur.');
+        }
+
+        // Fonction pour recharger la liste
+        function loadTasks() {
+            tasksBody.innerHTML = '';
+            let displayTasks = [...tasks];
+            if (isSortedByDate) {
+                displayTasks.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+            } else {
+                displayTasks.reverse();
+            }
+
+            displayTasks.forEach((task) => {
+                const row = document.createElement('tr');
+
+                // Enregistrement audio
+                const enrgCell = document.createElement('td');
+                const microBtn = document.createElement('span');
+                microBtn.textContent = '🎤';
+                microBtn.style.cursor = 'pointer';
+                microBtn.onclick = () => {
+                    const audioBlob = base64ToBlob(task.audioData, 'audio/webm');
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    audioPlayer.src = audioUrl;
+                    audioPlayer.play();
+                };
+                enrgCell.appendChild(microBtn);
+                row.appendChild(enrgCell);
+
+                // Tâche et date
+                const taskCell = document.createElement('td');
+                const dateCell = document.createElement('td');
+                taskCell.textContent = task.summary || '';
+                dateCell.textContent = task.date || '';
+                row.appendChild(isSortedByDate ? dateCell : taskCell);
+                row.appendChild(isSortedByDate ? taskCell : dateCell);
+
+                // PJ
+                const attachmentCell = document.createElement('td');
+                attachmentCell.textContent = '+';
+                row.appendChild(attachmentCell);
+
+                // Suppression
+                const deleteCell = document.createElement('td');
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = 'Suppr';
+                deleteBtn.onclick = () => {
+                    tasks.splice(tasks.indexOf(task), 1);
+                    localStorage.setItem('tasks', JSON.stringify(tasks));
+                    loadTasks();
+                };
+                deleteCell.appendChild(deleteBtn);
+                row.appendChild(deleteCell);
+
+                tasksBody.appendChild(row);
+            });
+        }
+
+        // Base64 → Blob
+        function base64ToBlob(base64, mime) {
+            const byteChars = atob(base64);
+            const byteArrays = [];
+            for (let offset = 0; offset < byteChars.length; offset += 512) {
+                const slice = byteChars.slice(offset, offset + 512);
+                const byteNumbers = new Array(slice.length);
+                for (let i = 0; i < slice.length; i++) {
+                    byteNumbers[i] = slice.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                byteArrays.push(byteArray);
+            }
+            return new Blob(byteArrays, { type: mime });
+        }
+
+        // Démarrer / arrêter enregistrement
+        recordBtn.onclick = () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                recognition?.stop();
+                mediaRecorder.stop();
+                recordBtn.classList.remove('recording');
+                recordLabel.textContent = 'Clique pour enregistrer';
+            } else {
+                navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    transcript = '';
+
+                    mediaRecorder.ondataavailable = (event) => audioChunks.push(event.data);
+
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        const reader = new FileReader();
+                        reader.readAsDataURL(audioBlob);
+                        reader.onloadend = () => {
+                            const base64Audio = reader.result.split(',')[1];
+                            tasks.push({
+                                audioData: base64Audio,
+                                transcript: transcript,
+                                summary: transcript.trim() || 'Nouvelle tâche',
+                                date: '',
+                                attachments: []
+                            });
+                            localStorage.setItem('tasks', JSON.stringify(tasks));
+                            loadTasks();
+                        };
+                    };
+
+                    mediaRecorder.start();
+                    recognition?.start();
+                    recordBtn.classList.add('recording');
+                    recordLabel.textContent = 'Clique pour arrêter';
+                }).catch(err => {
+                    console.error('Erreur accès micro:', err);
+                });
+            }
+        };
+
+        // Tri
+        sortBtn.onclick = () => {
+            isSortedByDate = !isSortedByDate;
+            sortBtn.textContent = isSortedByDate ? 'Changer en Tâche/Date' : 'Changer en Date/Tâche';
+            loadTasks();
+        };
+
+        // Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js')
+                .then(() => console.log('Service Worker enregistré'))
+                .catch(err => console.error('Échec Service Worker', err));
+        }
+
+        loadTasks();
+    });
+    </script>
+</body>
+</html>
