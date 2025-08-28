@@ -239,6 +239,12 @@
                 padding: 8px;
                 font-size: 14px;
             }
+
+            .record-btn {
+                width: 50px;
+                height: 50px;
+                font-size: 20px;
+            }
         }
     </style>
 </head>
@@ -307,6 +313,17 @@
         </div>
     </div>
 
+    <!-- Modal for text input fallback -->
+    <div id="text-input-modal" class="modal">
+        <div class="modal-content">
+            <h2>Saisir la tâche manuellement</h2>
+            <textarea id="text-input-task" placeholder="Entrez votre tâche ici..."></textarea>
+            <input type="date" id="text-input-date">
+            <button id="save-text-input">Valider</button>
+            <button id="cancel-text-input">Annuler</button>
+        </div>
+    </div>
+
     <!-- Notifications container -->
     <div id="notifications-container"></div>
 
@@ -342,6 +359,12 @@
             const confirmDelete = document.getElementById('confirm-delete');
             const cancelDelete = document.getElementById('cancel-delete');
 
+            const textInputModal = document.getElementById('text-input-modal');
+            const textInputTask = document.getElementById('text-input-task');
+            const textInputDate = document.getElementById('text-input-date');
+            const saveTextInput = document.getElementById('save-text-input');
+            const cancelTextInput = document.getElementById('cancel-text-input');
+
             let tasks = JSON.parse(localStorage.getItem('tasks')) || [];
             let currentEditIndex = -1;
             let currentDeleteIndex = -1;
@@ -351,10 +374,17 @@
             let recognition;
             let transcript = '';
             let isSortedByDate = false;
+            let isSpeechSupported = false;
+
+            // Check for secure context
+            if (!window.isSecureContext) {
+                showNotification('Erreur : Une connexion sécurisée (HTTPS ou localhost) est requise pour utiliser le microphone.');
+            }
 
             // Initialize SpeechRecognition
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
+                isSpeechSupported = true;
                 recognition = new SpeechRecognition();
                 recognition.lang = 'fr-FR';
                 recognition.interimResults = true;
@@ -368,9 +398,19 @@
 
                 recognition.onerror = (event) => {
                     console.error('Speech recognition error:', event.error);
+                    showNotification(`Erreur de reconnaissance vocale : ${event.error}. Utilisez l'entrée texte manuelle.`);
+                    stopRecording();
+                    openTextInputModal();
+                };
+
+                recognition.onend = () => {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        // Restart recognition if recording is still active
+                        recognition.start();
+                    }
                 };
             } else {
-                alert('La reconnaissance vocale n\'est pas supportée sur ce navigateur.');
+                showNotification('La reconnaissance vocale n\'est pas supportée sur ce navigateur. Utilisez l\'entrée texte manuelle.');
             }
 
             // Load tasks
@@ -438,6 +478,7 @@
 
             // Play audio
             function playAudio(base64Audio) {
+                if (!base64Audio) return;
                 const audioBlob = base64ToBlob(base64Audio, 'audio/webm');
                 const audioUrl = URL.createObjectURL(audioBlob);
                 audioPlayer.src = audioUrl;
@@ -499,13 +540,39 @@
                 return '';
             }
 
+            // Show notification
+            function showNotification(message) {
+                const notification = document.createElement('div');
+                notification.className = 'notification';
+                notification.innerHTML = `
+                    <span>${message}</span>
+                    <button onclick="this.parentElement.style.display='none'">Fermer</button>
+                `;
+                notificationsContainer.appendChild(notification);
+                notification.style.display = 'block';
+                setTimeout(() => {
+                    notification.style.display = 'none';
+                }, 5000);
+            }
+
+            // Stop recording
+            function stopRecording() {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    recordBtn.classList.remove('recording');
+                    recordLabel.textContent = 'Clique pour enregistrer';
+                }
+                if (recognition && recognition.state !== 'inactive') {
+                    recognition.stop();
+                }
+            }
+
             // Start/stop recording
             recordBtn.onclick = () => {
                 if (mediaRecorder && mediaRecorder.state === 'recording') {
-                    mediaRecorder.stop();
-                    recognition.stop();
-                    recordBtn.classList.remove('recording');
-                    recordLabel.textContent = 'Clique pour enregistrer';
+                    stopRecording();
+                } else if (!isSpeechSupported || !window.isSecureContext) {
+                    openTextInputModal();
                 } else {
                     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
                         mediaRecorder = new MediaRecorder(stream);
@@ -535,16 +602,157 @@
                                 loadTasks();
                                 checkNotifications();
                             };
+                            stream.getTracks().forEach(track => track.stop());
                         };
 
                         mediaRecorder.start();
-                        recognition.start();
+                        if (isSpeechSupported) {
+                            recognition.start();
+                        }
                         recordBtn.classList.add('recording');
                         recordLabel.textContent = 'Clique pour arrêter';
                     }).catch(err => {
                         console.error('Error accessing microphone:', err);
+                        showNotification('Erreur : Impossible d\'accéder au microphone. Veuillez vérifier les autorisations et utiliser une connexion sécurisée.');
+                        openTextInputModal();
                     });
                 }
+            };
+
+            // Open text input modal
+            function openTextInputModal() {
+                textInputTask.value = '';
+                textInputDate.value = '';
+                textInputModal.style.display = 'flex';
+            }
+
+            saveTextInput.onclick = () => {
+                const summary = textInputTask.value.trim() || 'Nouvelle tâche';
+                const date = textInputDate.value;
+                tasks.push({
+                    audioData: '',
+                    transcript: summary,
+                    summary: summary,
+                    date: date,
+                    attachments: []
+                });
+                localStorage.setItem('tasks', JSON.stringify(tasks));
+                loadTasks();
+                textInputModal.style.display = 'none';
+                checkNotifications();
+            };
+
+            cancelTextInput.onclick = () => {
+                textInputModal.style.display = 'none';
+            };
+
+            // Open edit modal
+            function openEditModal(index) {
+                currentEditIndex = index;
+                editSummary.value = tasks[index].summary;
+                editModal.style.display = 'flex';
+            }
+
+            saveEdit.onclick = () => {
+                tasks[currentEditIndex].summary = editSummary.value;
+                localStorage.setItem('tasks', JSON.stringify(tasks));
+                loadTasks();
+                editModal.style.display = 'none';
+            };
+
+            cancelEdit.onclick = () => {
+                editModal.style.display = 'none';
+            };
+
+            // Open date modal
+            function openDateModal(index) {
+                currentEditIndex = index;
+                editDate.value = tasks[index].date;
+                dateModal.style.display = 'flex';
+            }
+
+            saveDate.onclick = () => {
+                tasks[currentEditIndex].date = editDate.value;
+                localStorage.setItem('tasks', JSON.stringify(tasks));
+                loadTasks();
+                dateModal.style.display = 'none';
+                checkNotifications();
+            };
+
+            cancelDate.onclick = () => {
+                dateModal.style.display = 'none';
+            };
+
+            // Open attachment modal
+            function openAttachmentModal(index) {
+                currentAttachmentIndex = index;
+                attachmentList.innerHTML = '';
+                tasks[index].attachments.forEach((attachment, attIndex) => {
+                    const li = document.createElement('li');
+                    const link = document.createElement('a');
+                    link.href = attachment.data;
+                    link.textContent = attachment.name;
+                    link.download = attachment.name;
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.textContent = 'Supprimer';
+                    deleteBtn.onclick = () => {
+                        tasks[index].attachments.splice(attIndex, 1);
+                        localStorage.setItem('tasks', JSON.stringify(tasks));
+                        openAttachmentModal(index);
+                    };
+                    li.appendChild(link);
+                    li.appendChild(deleteBtn);
+                    attachmentList.appendChild(li);
+                });
+                attachmentModal.style.display = 'flex';
+            }
+
+            addAttachment.onclick = () => {
+                const files = attachmentInput.files;
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const reader = new FileReader();
+                    reader.readAsDataURL(file);
+                    reader.onload = () => {
+                        tasks[currentAttachmentIndex].attachments.push({
+                            name: file.name,
+                            data: reader.result
+                        });
+                        localStorage.setItem('tasks', JSON.stringify(tasks));
+                        openAttachmentModal(currentAttachmentIndex);
+                    };
+                }
+            };
+
+            closeAttachment.onclick = () => {
+                attachmentModal.style.display = 'none';
+                attachmentInput.value = '';
+            };
+
+            // Open confirm modal
+            function openConfirmModal(index) {
+                currentDeleteIndex = index;
+                confirmModal.style.display = 'flex';
+            }
+
+            saveTextInput.onclick = () => {
+                const summary = textInputTask.value.trim() || 'Nouvelle tâche';
+                const date = textInputDate.value;
+                tasks.push({
+                    audioData: '',
+                    transcript: summary,
+                    summary: summary,
+                    date: date,
+                    attachments: []
+                });
+                localStorage.setItem('tasks', JSON.stringify(tasks));
+                loadTasks();
+                textInputModal.style.display = 'none';
+                checkNotifications();
+            };
+
+            cancelTextInput.onclick = () => {
+                textInputModal.style.display = 'none';
             };
 
             // Open edit modal
