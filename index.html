@@ -106,7 +106,7 @@
 
         .record-btn::before {
             content: "🎤";
-            color: black;
+            color: white;
         }
 
         .modal {
@@ -136,6 +136,8 @@
             width: 100%;
             height: 100px;
             margin-bottom: 10px;
+            padding: 8px;
+            resize: vertical;
         }
 
         .modal-content input[type="date"] {
@@ -244,6 +246,10 @@
                 width: 50px;
                 height: 50px;
                 font-size: 20px;
+            }
+
+            .modal-content {
+                width: 90%;
             }
         }
     </style>
@@ -375,6 +381,7 @@
             let transcript = '';
             let isSortedByDate = false;
             let isSpeechSupported = false;
+            let mediaStream = null;
 
             // Check for secure context
             if (!window.isSecureContext) {
@@ -398,15 +405,29 @@
 
                 recognition.onerror = (event) => {
                     console.error('Speech recognition error:', event.error);
-                    showNotification(`Erreur de reconnaissance vocale : ${event.error}. Utilisez l'entrée texte manuelle.`);
-                    stopRecording();
-                    openTextInputModal();
+                    if (event.error === 'no-speech' || event.error === 'aborted') {
+                        // Attempt to restart recognition
+                        if (mediaRecorder && mediaRecorder.state === 'recording') {
+                            try {
+                                recognition.start();
+                            } catch (e) {
+                                console.error('Failed to restart recognition:', e);
+                            }
+                        }
+                    } else {
+                        showNotification(`Erreur de reconnaissance vocale : ${event.error}. Utilisez l'entrée texte manuelle.`);
+                        stopRecording();
+                        openTextInputModal();
+                    }
                 };
 
                 recognition.onend = () => {
                     if (mediaRecorder && mediaRecorder.state === 'recording') {
-                        // Restart recognition if recording is still active
-                        recognition.start();
+                        try {
+                            recognition.start();
+                        } catch (e) {
+                            console.error('Failed to restart recognition:', e);
+                        }
                     }
                 };
             } else {
@@ -482,23 +503,32 @@
                 const audioBlob = base64ToBlob(base64Audio, 'audio/webm');
                 const audioUrl = URL.createObjectURL(audioBlob);
                 audioPlayer.src = audioUrl;
-                audioPlayer.play();
+                audioPlayer.play().catch(err => {
+                    console.error('Audio playback error:', err);
+                    showNotification('Erreur lors de la lecture de l\'audio.');
+                });
             }
 
             // Base64 to Blob
             function base64ToBlob(base64, mime) {
-                const byteChars = atob(base64);
-                const byteArrays = [];
-                for (let offset = 0; offset < byteChars.length; offset += 512) {
-                    const slice = byteChars.slice(offset, offset + 512);
-                    const byteNumbers = new Array(slice.length);
-                    for (let i = 0; i < slice.length; i++) {
-                        byteNumbers[i] = slice.charCodeAt(i);
+                try {
+                    const byteChars = atob(base64);
+                    const byteArrays = [];
+                    for (let offset = 0; offset < byteChars.length; offset += 512) {
+                        const slice = byteChars.slice(offset, offset + 512);
+                        const byteNumbers = new Array(slice.length);
+                        for (let i = 0; i < slice.length; i++) {
+                            byteNumbers[i] = slice.charCodeAt(i);
+                        }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        byteArrays.push(byteArray);
                     }
-                    const byteArray = new Uint8Array(byteNumbers);
-                    byteArrays.push(byteArray);
+                    return new Blob(byteArrays, { type: mime });
+                } catch (e) {
+                    console.error('Error converting base64 to blob:', e);
+                    showNotification('Erreur lors de la conversion de l\'audio.');
+                    return null;
                 }
-                return new Blob(byteArrays, { type: mime });
             }
 
             // Extract date from transcript
@@ -565,6 +595,10 @@
                 if (recognition && recognition.state !== 'inactive') {
                     recognition.stop();
                 }
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach(track => track.stop());
+                    mediaStream = null;
+                }
             }
 
             // Start/stop recording
@@ -575,12 +609,15 @@
                     openTextInputModal();
                 } else {
                     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-                        mediaRecorder = new MediaRecorder(stream);
+                        mediaStream = stream;
+                        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                         audioChunks = [];
                         transcript = '';
 
                         mediaRecorder.ondataavailable = (event) => {
-                            audioChunks.push(event.data);
+                            if (event.data.size > 0) {
+                                audioChunks.push(event.data);
+                            }
                         };
 
                         mediaRecorder.onstop = () => {
@@ -602,18 +639,33 @@
                                 loadTasks();
                                 checkNotifications();
                             };
-                            stream.getTracks().forEach(track => track.stop());
+                            reader.onerror = () => {
+                                showNotification('Erreur lors de la lecture de l\'audio.');
+                            };
                         };
 
-                        mediaRecorder.start();
+                        mediaRecorder.onerror = (event) => {
+                            console.error('MediaRecorder error:', event);
+                            showNotification('Erreur lors de l\'enregistrement audio.');
+                            stopRecording();
+                            openTextInputModal();
+                        };
+
+                        mediaRecorder.start(1000); // Timeslice to prevent buffer overflow on mobile
                         if (isSpeechSupported) {
-                            recognition.start();
+                            try {
+                                recognition.start();
+                            } catch (e) {
+                                console.error('Failed to start recognition:', e);
+                                showNotification('Erreur lors du démarrage de la reconnaissance vocale.');
+                                openTextInputModal();
+                            }
                         }
                         recordBtn.classList.add('recording');
                         recordLabel.textContent = 'Clique pour arrêter';
                     }).catch(err => {
                         console.error('Error accessing microphone:', err);
-                        showNotification('Erreur : Impossible d\'accéder au microphone. Veuillez vérifier les autorisations et utiliser une connexion sécurisée.');
+                        showNotification('Erreur : Impossible d\'accéder au microphone. Vérifiez les autorisations et utilisez une connexion sécurisée.');
                         openTextInputModal();
                     });
                 }
@@ -654,7 +706,7 @@
             }
 
             saveEdit.onclick = () => {
-                tasks[currentEditIndex].summary = editSummary.value;
+                tasks[currentEditIndex].summary = editSummary.value.trim() || 'Nouvelle tâche';
                 localStorage.setItem('tasks', JSON.stringify(tasks));
                 loadTasks();
                 editModal.style.display = 'none';
@@ -721,114 +773,8 @@
                         localStorage.setItem('tasks', JSON.stringify(tasks));
                         openAttachmentModal(currentAttachmentIndex);
                     };
-                }
-            };
-
-            closeAttachment.onclick = () => {
-                attachmentModal.style.display = 'none';
-                attachmentInput.value = '';
-            };
-
-            // Open confirm modal
-            function openConfirmModal(index) {
-                currentDeleteIndex = index;
-                confirmModal.style.display = 'flex';
-            }
-
-            saveTextInput.onclick = () => {
-                const summary = textInputTask.value.trim() || 'Nouvelle tâche';
-                const date = textInputDate.value;
-                tasks.push({
-                    audioData: '',
-                    transcript: summary,
-                    summary: summary,
-                    date: date,
-                    attachments: []
-                });
-                localStorage.setItem('tasks', JSON.stringify(tasks));
-                loadTasks();
-                textInputModal.style.display = 'none';
-                checkNotifications();
-            };
-
-            cancelTextInput.onclick = () => {
-                textInputModal.style.display = 'none';
-            };
-
-            // Open edit modal
-            function openEditModal(index) {
-                currentEditIndex = index;
-                editSummary.value = tasks[index].summary;
-                editModal.style.display = 'flex';
-            }
-
-            saveEdit.onclick = () => {
-                tasks[currentEditIndex].summary = editSummary.value;
-                localStorage.setItem('tasks', JSON.stringify(tasks));
-                loadTasks();
-                editModal.style.display = 'none';
-            };
-
-            cancelEdit.onclick = () => {
-                editModal.style.display = 'none';
-            };
-
-            // Open date modal
-            function openDateModal(index) {
-                currentEditIndex = index;
-                editDate.value = tasks[index].date;
-                dateModal.style.display = 'flex';
-            }
-
-            saveDate.onclick = () => {
-                tasks[currentEditIndex].date = editDate.value;
-                localStorage.setItem('tasks', JSON.stringify(tasks));
-                loadTasks();
-                dateModal.style.display = 'none';
-                checkNotifications();
-            };
-
-            cancelDate.onclick = () => {
-                dateModal.style.display = 'none';
-            };
-
-            // Open attachment modal
-            function openAttachmentModal(index) {
-                currentAttachmentIndex = index;
-                attachmentList.innerHTML = '';
-                tasks[index].attachments.forEach((attachment, attIndex) => {
-                    const li = document.createElement('li');
-                    const link = document.createElement('a');
-                    link.href = attachment.data;
-                    link.textContent = attachment.name;
-                    link.download = attachment.name;
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.textContent = 'Supprimer';
-                    deleteBtn.onclick = () => {
-                        tasks[index].attachments.splice(attIndex, 1);
-                        localStorage.setItem('tasks', JSON.stringify(tasks));
-                        openAttachmentModal(index);
-                    };
-                    li.appendChild(link);
-                    li.appendChild(deleteBtn);
-                    attachmentList.appendChild(li);
-                });
-                attachmentModal.style.display = 'flex';
-            }
-
-            addAttachment.onclick = () => {
-                const files = attachmentInput.files;
-                for (let i = 0; i < files.length; i++) {
-                    const file = files[i];
-                    const reader = new FileReader();
-                    reader.readAsDataURL(file);
-                    reader.onload = () => {
-                        tasks[currentAttachmentIndex].attachments.push({
-                            name: file.name,
-                            data: reader.result
-                        });
-                        localStorage.setItem('tasks', JSON.stringify(tasks));
-                        openAttachmentModal(currentAttachmentIndex);
+                    reader.onerror = () => {
+                        showNotification('Erreur lors du chargement du fichier.');
                     };
                 }
             };
@@ -902,8 +848,19 @@
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.register('/sw.js', { scope: '/' })
                     .then(reg => console.log('Service Worker registered', reg))
-                    .catch(err => console.error('Service Worker registration failed', err));
+                    .catch(err => {
+                        console.error('Service Worker registration failed', err);
+                        showNotification('Erreur lors de l\'enregistrement du Service Worker.');
+                    });
             }
+
+            // Handle visibility change to prevent recording issues
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden' && mediaRecorder && mediaRecorder.state === 'recording') {
+                    stopRecording();
+                    showNotification('Enregistrement arrêté car l\'application est en arrière-plan.');
+                }
+            });
 
             loadTasks();
         });
